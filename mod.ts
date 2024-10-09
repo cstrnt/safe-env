@@ -42,8 +42,14 @@
  *  HOST: string({ defaultValue: "localhost" }),
  *  URL: url({ defaultValue: new URL("http://localhost:3000") }),
  *  ENABLE_LOGGING: boolean(),
+ *  LOGGING_INTERVAL: number({ optional: true }),
  * });
  *
+ * The validators take the following parameters:
+ * - `defaultValue` - The default value for the environment variable
+ * - `optional` - If the environment variable is optional
+ *
+ * if optional is set to true, the value can be undefined.
  * @module safe-env
  */
 
@@ -54,6 +60,33 @@ export type ValidatorParams<
   T extends string | number | boolean | URL,
 > = {
   defaultValue?: T;
+  optional?: boolean;
+};
+
+type InferValidatorType<
+  T extends string | number | boolean | URL,
+  O extends ValidatorParams<T>,
+> = undefined extends O["defaultValue"]
+  ? O["optional"] extends true ? T | undefined : T
+  : T;
+
+const makeValidator = <
+  T extends string | number | boolean | URL,
+  const O extends ValidatorParams<T>,
+>(
+  validationOptions: ValidatorParams<T> | undefined,
+  valueParser: (value: string | undefined) => T,
+  value: string | undefined,
+): InferValidatorType<T, O> => {
+  if (value === undefined) {
+    if (validationOptions?.defaultValue) {
+      return validationOptions.defaultValue;
+    }
+    if (validationOptions?.optional) {
+      return value as unknown as T;
+    }
+  }
+  return valueParser(value);
 };
 
 /**
@@ -61,17 +94,17 @@ export type ValidatorParams<
  * @param validationOptions an object with the default value for the environment variable
  * @returns the value of the environment variable as a number
  */
-export const number =
-  (validationOptions?: ValidatorParams<number>) =>
-  (value: string | undefined): number => {
-    if (validationOptions?.defaultValue && value === undefined) {
-      return validationOptions.defaultValue;
+export const number = <T extends ValidatorParams<number>>(
+  validationOptions?: T,
+) =>
+(value: string | undefined): InferValidatorType<number, T> => {
+  return makeValidator(validationOptions, (v) => {
+    if (isNaN(Number(v))) {
+      throw new Error(`Expected a number, but got ${v}`);
     }
-    if (isNaN(Number(value))) {
-      throw new Error(`Expected a number, but got ${value}`);
-    }
-    return Number(value);
-  };
+    return Number(v);
+  }, value);
+};
 
 /**
  * This function can be used to validate environment variables that are strings
@@ -79,15 +112,14 @@ export const number =
  * @returns the value of the environment variable as a string
  */
 export const string =
-  (validationOptions?: ValidatorParams<string>) =>
-  (value: string | undefined): string => {
-    if (validationOptions?.defaultValue && value === undefined) {
-      return validationOptions.defaultValue;
-    }
-    if (value === undefined) {
-      throw new Error(`Expected a string, but got ${value}`);
-    }
-    return value;
+  <const T extends ValidatorParams<string>>(validationOptions?: T) =>
+  (value: string | undefined): InferValidatorType<string, T> => {
+    return makeValidator(validationOptions, (v) => {
+      if (v === undefined) {
+        throw new Error(`Expected a string, but got ${value}`);
+      }
+      return v;
+    }, value);
   };
 
 /**
@@ -96,19 +128,18 @@ export const string =
  * @returns the value of the environment variable as a URL
  */
 export const url =
-  (validationOptions?: ValidatorParams<URL>) =>
-  (value: string | undefined): URL => {
-    if (validationOptions?.defaultValue && value === undefined) {
-      return validationOptions.defaultValue;
-    }
-    try {
-      if (value === undefined) {
+  <const T extends ValidatorParams<URL>>(validationOptions?: T) =>
+  (value: string | undefined): InferValidatorType<URL, T> => {
+    return makeValidator(validationOptions, (v) => {
+      try {
+        if (v === undefined) {
+          throw new Error(`Expected a URL, but got ${value}`);
+        }
+        return new URL(v);
+      } catch {
         throw new Error(`Expected a URL, but got ${value}`);
       }
-      return new URL(value);
-    } catch {
-      throw new Error(`Expected a URL, but got ${value}`);
-    }
+    }, value);
   };
 
 /**
@@ -116,15 +147,15 @@ export const url =
  * @param validationOptions an object with the default value for the environment variable
  * @returns the value of the environment variable as a boolean
  */
-export const boolean = (validationOptions?: ValidatorParams<boolean>) =>
-(
-  value: string | undefined,
-): boolean => {
-  if (validationOptions?.defaultValue && value === undefined) {
-    return validationOptions.defaultValue;
-  }
-  return value === "true";
-};
+export const boolean =
+  <const T extends ValidatorParams<boolean>>(validationOptions?: T) =>
+  (
+    value: string | undefined,
+  ): InferValidatorType<boolean, T> => {
+    return makeValidator(validationOptions, (v) => {
+      return v === "true";
+    }, value);
+  };
 
 /**
  * This function takes an object with the keys and validators for the environment variables
@@ -140,24 +171,29 @@ export function safeEnv<
 >(
   env: T,
 ): {
-  [K in keyof T]: T[K] extends ReturnType<typeof number> ? number
-    : T[K] extends ReturnType<typeof string> ? string
-    : T[K] extends ReturnType<typeof url> ? URL
-    : T[K] extends ReturnType<typeof boolean> ? boolean
-    : never;
+  [K in keyof T]: ReturnType<T[K]>;
 } {
-  return Object.entries(env).reduce((acc, [key, validator]) => {
+  const errors: string[] = [];
+  const validatedEnv = Object.entries(env).reduce((acc, [key, validator]) => {
     const value = Deno.env.get(key);
 
     if (typeof validator !== "function") {
       throw new Error(`Invalid validator for ${key}`);
     }
-    return { ...acc, [key]: validator(value) };
+    try {
+      return { ...acc, [key]: validator(value) };
+    } catch (e) {
+      if (!(e instanceof Error)) {
+        throw e;
+      }
+      errors.push(`🚨 [safe-env]: Error with env var ${key}: ${e.message}`);
+      return acc;
+    }
   }, {}) as {
-    [K in keyof T]: T[K] extends ReturnType<typeof number> ? number
-      : T[K] extends ReturnType<typeof string> ? string
-      : T[K] extends ReturnType<typeof url> ? URL
-      : T[K] extends ReturnType<typeof boolean> ? boolean
-      : never;
+    [K in keyof T]: ReturnType<T[K]>;
   };
+  if (errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
+  return validatedEnv;
 }

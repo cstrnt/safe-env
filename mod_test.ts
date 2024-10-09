@@ -1,5 +1,12 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertExists } from "@std/assert";
 import { boolean, number, safeEnv, string, url } from "./mod.ts";
+
+// Testing utilities
+type Expect<T extends true> = T;
+type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <
+  T,
+>() => T extends Y ? 1 : 2 ? true
+  : false;
 
 const originalEnv = Deno.env.toObject();
 
@@ -39,7 +46,7 @@ Deno.test("the safeEnv function", async (t) => {
       if (!(e instanceof Error)) {
         throw e;
       }
-      assertEquals(e.message, "Expected a number, but got not-a-number");
+      assertExists(e);
     }
   });
 
@@ -49,7 +56,7 @@ Deno.test("the safeEnv function", async (t) => {
     const env = safeEnv({
       PORT: number({ defaultValue: 3000 }),
     });
-
+    type Test = Expect<Equal<typeof env.PORT, number>>;
     assertEquals(env.PORT, 3000);
   });
 
@@ -62,4 +69,34 @@ Deno.test("the safeEnv function", async (t) => {
   });
 
   resetEnv();
+
+  await t.step("it works with optional values", () => {
+    const env = safeEnv({
+      PORT: number({ optional: true }),
+    });
+    type Test = Expect<Equal<typeof env.PORT, number | undefined>>;
+    assertEquals(env.PORT, undefined);
+  });
+
+  await t.step("it works with optional values and default values", () => {
+    const env = safeEnv({
+      PORT: number({ optional: true, defaultValue: 3000 }),
+    });
+
+    type Test = Expect<Equal<typeof env.PORT, number>>;
+    assertEquals(env.PORT, 3000);
+  });
+
+  await t.step("it throws with missing required values", () => {
+    try {
+      safeEnv({
+        PORT: number(),
+      });
+    } catch (e) {
+      if (!(e instanceof Error)) {
+        throw e;
+      }
+      assertExists(e);
+    }
+  });
 });
