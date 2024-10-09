@@ -44,6 +44,7 @@
  *  ENABLE_LOGGING: boolean(),
  *  LOGGING_INTERVAL: number({ optional: true }),
  * });
+ * ```
  *
  * The validators take the following parameters:
  * - `defaultValue` - The default value for the environment variable
